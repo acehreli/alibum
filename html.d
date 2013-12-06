@@ -25,19 +25,23 @@ class XmlElement
         this.attributes = attributes;
     }
 
-    void add(XmlElement[] elements...)
+    XmlElement add(XmlElement[] elements...)
     {
         this.elements ~= elements;
+        return this;
     }
 
-    void add(string data)
+    XmlElement add(string[string] attributes...)
+    {
+        foreach (key, value; attributes) {
+            this.attributes[key] = value;
+        }
+        return this;
+    }
+
+    XmlElement add(string data)
     {
         this.data ~= data;
-    }
-
-    XmlElement addAttribute(string key, string value)
-    {
-        attributes[key] = value;
         return this;
     }
 
@@ -45,18 +49,8 @@ class XmlElement
     {
         auto result = appender!string;
 
-        formattedWrite(result, "<%s", tag);
-
-        foreach (key, value; attributes) {
-            formattedWrite(result, ` %s="%s"`, key, value);
-        }
-
-        formattedWrite(result, ">");
-
-        foreach (element; elements) {
-            formattedWrite(result, "%s", element);
-        }
-
+        formattedWrite(result, `<%s%-( %s="%s"%|%)>`, tag, attributes);
+        formattedWrite(result, "%(%s%)", elements);
         formattedWrite(result, "%s", data);
 
         if (!tagClosing.empty) {
@@ -77,10 +71,9 @@ class SimpleXmlElement(string Tag, string TagClosing = Tag) : XmlElement
 
 class Document : XmlElement
 {
-    this(Html html)
+    this(string[string] attributes = null)
     {
-        super("!DOCTYPE html", "");
-        add(html);
+        super("!DOCTYPE html", "", attributes);
     }
 }
 
@@ -91,10 +84,50 @@ alias Table = SimpleXmlElement!"table";
 alias TableRow = SimpleXmlElement!"tr";
 alias TableCell = SimpleXmlElement!"td";
 alias Center = SimpleXmlElement!"center";
-alias Img = SimpleXmlElement!"img";
 alias Link = SimpleXmlElement!"a";
 alias Style = SimpleXmlElement!"style";
 alias Span = SimpleXmlElement!"span";
+alias Title = SimpleXmlElement!"title";
+
+class Break : XmlElement
+{
+    this()
+    {
+        super("br", "");
+    }
+}
+
+class Img : XmlElement
+{
+    this(string[string] attributes = null)
+    {
+        super("img", "", attributes);
+    }
+}
+
+class Base : XmlElement
+{
+    this(string[string] attributes = null){
+        super("base", "", attributes);
+    }
+}
+
+struct CssStyleValue
+{
+    string element;
+    string[string] styles;
+
+    this(string element, string[string] styles = null)
+    {
+        this.element = element;
+        this.styles = styles;
+    }
+
+    string toString() const
+    {
+        return format(`%s {%-(%s:%s;%)}`, element, styles);
+    }
+}
 
 Center centered(XmlElement[] elements...)
 {
@@ -110,7 +143,17 @@ Link makeLink(string href, string text)
     return link;
 }
 
-Img makeImg(string url)
+Img makeImg(string src, string alt = "image")
 {
-    return new Img([ "src" : url ]);
+    return new Img([ "src" : src, "alt" : alt ]);
+}
+
+XmlElement makeTitle(string title)
+{
+    return (new Title).add(title);
+}
+
+Base makeBase(string href)
+{
+    return new Base([ "href" : href ]);
 }

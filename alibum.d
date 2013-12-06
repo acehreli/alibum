@@ -16,22 +16,32 @@ import std.range;
 
 pragma(lib, "MagickWand");
 
-enum size_t pictureSize = 1024;
+enum size_t pictureSize = 800;
 enum size_t thumbnailSize = 64;
 enum size_t thumbnailForward = pictureSize / thumbnailSize / 2 - 1;
 enum size_t thumbnailBackward = thumbnailForward;
-enum string imageExt = ".JPG";
+enum string[] imageExtensions = [ ".JPG", ".jpg", ".jpeg" ];
 enum size_t compressionQuality = 70;
 
 enum size_t cellWidth = thumbnailSize + 4;
 enum size_t cellHeight = cellWidth;
 
-enum string padColor = "#f0f0f0";
-enum string linkBgColor = "#c0c0ff";
-enum string tableCellStyle = format("td { width:%spx; height:%spx;" ~
-                                    " padding:4px 0px 0px 0px; border:0px;" ~
-                                    " margin:0px; vertical-align:center; }",
-                                    cellWidth, cellHeight);
+enum string previousPageText = "prev. page";
+enum string nextPageText = "next page";
+enum string padColor = "#eeeeee";
+enum string linkBgColor = "#aaaaff";
+enum tableCellStyle = CssStyleValue(
+    "td",
+    [ "width" : format("%spx", cellWidth),
+      "height" : format("%spx", cellHeight),
+      "padding" : "4px 0px 0px 0px",
+      "border" : "0px",
+      "margin" : "0px",
+      "vertical-align" : "center" ]);
+
+enum fontStyle = CssStyleValue(
+    "body",
+    [ "font-size" : format("%spx", thumbnailSize / 4) ]);
 
 struct Image
 {
@@ -94,9 +104,6 @@ struct Image
         enforce(status == MagickBooleanType.MagickTrue);
 
         MagickThumbnailImage(wand, width, height);
-            // MagickResizeImage(wand, width, height,
-            //                   FilterTypes.LanczosFilter, 1.0);
-            // MagickAdaptiveResizeImage(wand, width, height);
 
         return toReturn;
     }
@@ -120,15 +127,8 @@ struct Image
 
 struct OutputInfo
 {
-    string fileName;
+    string filePath;
     string dateTimeOriginal;
-}
-
-string pictureName(string fileName)
-{
-    string ext = fileName.extension;
-    string base = fileName.baseName(ext);
-    return format("%s%s", base, ext);
 }
 
 string thumbnailName(string fileName)
@@ -148,7 +148,7 @@ OutputInfo processImage(string fileName)
     auto dateTimeOriginal = image.getProperty("exif:DateTimeOriginal");
 
     image.resize(pictureSize);
-    const pictName = format("./%s/%s", g_outputDir, pictureName(fileName));
+    const pictName = format("./%s/%s", g_outputDir, fileName.baseName);
     writefln("Writing %s", pictName);
     image.write(pictName);
 
@@ -159,7 +159,7 @@ OutputInfo processImage(string fileName)
     image.write(thumbnailName);
 
 
-    return OutputInfo(format("%s/%s", g_outputDir, pictureName(fileName)),
+    return OutputInfo(format("%s/%s", g_outputDir, fileName.baseName),
                       dateTimeOriginal);
 }
 
@@ -168,13 +168,21 @@ TableCell paddingCell()
     return new TableCell([ "align" : "center", "bgcolor" : padColor ]);
 }
 
-string pictureHtml(string fileName)
+string pictureFileName(string filePath)
 {
-    auto result = fileName.findSplit(imageExt);
-    return format("%s%s", result[0], ".html");
+    string ext = filePath.extension;
+    string base = filePath.baseName(ext);
+    return format("%s%s", base, ".html");
 }
 
-Table makeThumbnailStrip(OutputInfo[] pictures, size_t index)
+string pictureHtml(string filePath)
+{
+    string ext = filePath.extension;
+    string base = filePath.baseName(ext);
+    return format("%s/%s%s", filePath.dirName, base, ".html");
+}
+
+XmlElement makeThumbnailStrip(OutputInfo[] pictures, size_t index)
 {
     size_t beg = index - thumbnailBackward;
     size_t end = index + thumbnailForward + 1;
@@ -194,26 +202,46 @@ Table makeThumbnailStrip(OutputInfo[] pictures, size_t index)
 
     auto row = new TableRow;
 
+    if (beg > 0) {
+        // There is a previous page
+        const pageSize = thumbnailBackward + 1;
+        size_t previousPageIndex = beg;
+
+        if (previousPageIndex >= pageSize) {
+            previousPageIndex -= pageSize;
+
+        } else {
+            previousPageIndex = 0;
+        }
+
+        row.add(new TableCell([ "align" : "center",
+                                "bgcolor" : linkBgColor ])
+                .add(makeLink(pictureFileName(pictures[previousPageIndex]
+                                              .filePath),
+                              previousPageText)));
+
+    } else {
+        row.add(new TableCell([ "align" : "center",
+                                "bgcolor" : padColor ])
+                .add(previousPageText));
+    }
+
     foreach (_; padBefore) {
         row.add(paddingCell());
     }
 
     foreach (i; beg .. end) {
         if (i == index) {
-            auto cell = new TableCell([ "align" : "center" ]);
+            row.add(new TableCell([ "align" : "center" ])
+                    .add(new Span([ "style" : "opacity:0.5;" ])
+                         .add(makeImg(thumbnailName(pictures[i].filePath)))));
 
-            auto img = makeImg(thumbnailName(pictures[i].fileName));
-            auto span = new Span([ "style" : "opacity:0.5;" ]);
-            span.add(img);
-            cell.add(span);
-            row.add(cell);
         } else {
-            auto cell = new TableCell([ "align" : "center",
-                                        "bgcolor" : linkBgColor ]);
-            cell.add(
-                makeLink(pictureHtml(pictures[i].fileName),
-                         makeImg(thumbnailName(pictures[i].fileName)).text));
-            row.add(cell);
+            row.add(new TableCell([ "align" : "center",
+                                    "bgcolor" : linkBgColor ])
+                    .add(new Link([ "href" :
+                                    pictureFileName(pictures[i].filePath) ])
+                         .add(makeImg(thumbnailName(pictures[i].filePath)))));
         }
     }
 
@@ -221,62 +249,70 @@ Table makeThumbnailStrip(OutputInfo[] pictures, size_t index)
         row.add(paddingCell());
     }
 
-    auto table = new Table;
-    table.add(row);
+    if (end < pictures.length) {
+        // There is a next page
+        const pageSize = thumbnailBackward + 1;
+        size_t nextPageIndex = end + thumbnailForward;
+
+        if (nextPageIndex >= pictures.length) {
+            nextPageIndex = pictures.length - 1;
+        }
+
+        row.add(new TableCell([ "align" : "center",
+                                "bgcolor" : linkBgColor ])
+                    .add(makeLink(pictureFileName(pictures[nextPageIndex]
+                                                  .filePath),
+                                  nextPageText)));
+    } else {
+        row.add(new TableCell([ "align" : "center",
+                                "bgcolor" : padColor ])
+                .add(nextPageText));
+    }
+
+    auto table = (new Table).add(row);
 
     return table;
 }
 
-TableRow makePictureRow(string fileName)
+XmlElement makePictureRow(string filePath)
 {
-    auto cell = new TableCell([ "align" : "center" ]);
-    cell.add(makeImg(fileName));
-
-    auto row = new TableRow;
-    row.add(cell);
-
-    return row;
+    return (new TableRow).add(new TableCell([ "align" : "center" ])
+                              .add(makeImg(filePath.baseName)));
 }
 
-TableRow makePictureDateTimeRow(string dateTimeOriginal)
+XmlElement makePictureDateTimeRow(string dateTimeOriginal)
 {
-    auto cell = new TableCell([ "align" : "center" ]);
-    cell.add(dateTimeOriginal);
-
-    auto row = new TableRow;
-    row.add(cell);
-
-    return row;
+    return (new TableRow).add(new TableCell([ "align" : "center" ])
+                              .add(dateTimeOriginal));
 }
 
-Table makePictureTable(OutputInfo outputInfo)
+XmlElement makePictureTable(OutputInfo outputInfo)
 {
-    auto table = new Table;
-
-    table.add(makePictureRow(outputInfo.fileName));
-    table.add(makePictureDateTimeRow(outputInfo.dateTimeOriginal));
-
-    return table;
+    return (new Table).add(
+        [ makePictureRow(outputInfo.filePath),
+          makePictureDateTimeRow(outputInfo.dateTimeOriginal) ]);
 }
 
-void makePages(OutputInfo[] pictures)
+void makeHtmlPages(OutputInfo[] pictures, string outputDir)
 {
     foreach (i, picture; pictures.parallel) {
-        auto docBody = new Body;
-        docBody.add([ makeThumbnailStrip(pictures, i),
-                      makePictureTable(picture)].centered);
+        auto docBody = (new Body).add([ makeThumbnailStrip(pictures, i),
+                                        makePictureTable(picture)].centered);
 
         const pictureHtmlFileName =
-            format(".%s", pictureHtml(picture.fileName));
+            format(".%s", pictureHtml(picture.filePath));
         auto file = File(pictureHtmlFileName, "w");
 
-        auto style = new Style;
-        style.add(tableCellStyle);
-        auto head = new Head;
-        head.add(style);
-        auto html = new Html;
-        html.add([ head, cast(XmlElement)docBody ]);
-        auto doc = new Document(html);
+        auto doc = (new Document).add(
+            (new Html).add([ (new Head).add(
+                                   [ makeTitle(picture.filePath.baseName),
+                                     makeBase(outputDir ~ "/"),
+                                     new Style([ "type" : "text/css" ])
+                                     .add(tableCellStyle.to!string),
+                                     new Style([ "type" : "text/css" ])
+                                     .add(fontStyle.to!string) ]),
+
+                             docBody ]));
 
         writefln("Writing %s", pictureHtmlFileName);
         file.writeln(doc);
@@ -321,14 +357,14 @@ int main(string[] args)
     auto imageFiles = inputDir
                       .dirEntries(SpanMode.shallow)
                       .map!(a => a.name)
-                      .filter!(a => a.endsWith(imageExt));
+                      .filter!(a => imageExtensions.canFind(a.extension));
 
     auto pictures = taskPool.map!processImage(imageFiles)
                     .array;
 
     pictures.sort!((a, b) => (a.dateTimeOriginal < b.dateTimeOriginal));
 
-    makePages(pictures);
+    makeHtmlPages(pictures, outputDir);
 
     return 0;
 }
