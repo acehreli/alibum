@@ -13,18 +13,24 @@ import std.conv;
 import std.array;
 import std.algorithm;
 import std.range;
+import std.zip;
 
 pragma(lib, "MagickWand");
 
 enum size_t pictureSize = 800;
 enum size_t thumbnailSize = 64;
-enum size_t thumbnailForward = pictureSize / thumbnailSize / 2 - 1;
-enum size_t thumbnailBackward = thumbnailForward;
-enum string[] imageExtensions = [ ".JPG", ".jpg", ".jpeg" ];
-enum size_t compressionQuality = 70;
-
 enum size_t cellWidth = thumbnailSize + 4;
 enum size_t cellHeight = cellWidth;
+
+enum size_t compressionQuality = 70;
+enum size_t zipFileSizeLimit = 100 * 1024 * 1024;
+
+enum size_t thumbnailForward = pictureSize / thumbnailSize / 2 - 1;
+enum size_t thumbnailBackward = thumbnailForward;
+
+enum string[] imageExtensions = [ ".JPG", ".jpg", ".jpeg" ];
+enum string zipFileNameTemplate = format("%spx_pictures_%%s.zip", pictureSize);
+enum string originalsZipFileNameTemplate = "original_pictures_%s.zip";
 
 enum string previousPageText = "prev. page";
 enum string nextPageText = "next page";
@@ -90,12 +96,12 @@ struct Image
 
         if (imageHeight < imageWidth) {
             width = size;
-            height = cast(ulong)(width * ratio);
+            height = (width * ratio).to!ulong;
             toReturn = height;
 
         } else {
             height = size;
-            width = cast(ulong)(height / ratio);
+            width = (height / ratio).to!ulong;
             toReturn = width;
         }
 
@@ -120,14 +126,15 @@ struct Image
         char * propertyValue_raw =
             MagickGetImageProperty(wand, propertyName.toStringz);
         scope (exit) MagickRelinquishMemory(propertyValue_raw);
-        auto propertyValue = propertyValue_raw.to!string;
-        return propertyValue;
+
+        return propertyValue_raw.to!string;
     }
 }
 
 struct OutputInfo
 {
-    string filePath;
+    string originalFilePath;
+    string processedFilePath;
     string dateTimeOriginal;
 }
 
@@ -140,26 +147,27 @@ string thumbnailName(string fileName)
 
 shared string g_outputDir;
 
-OutputInfo processImage(string fileName)
+OutputInfo processImage(string filePath)
 {
-    writefln("Processing %s", fileName);
+    writefln("Processing %s", filePath);
 
-    auto image = Image(fileName);
+    auto image = Image(filePath);
     auto dateTimeOriginal = image.getProperty("exif:DateTimeOriginal");
 
     image.resize(pictureSize);
-    const pictName = format("./%s/%s", g_outputDir, fileName.baseName);
+    const pictName = format("./%s/%s", g_outputDir, filePath.baseName);
     writefln("Writing %s", pictName);
     image.write(pictName);
 
     image.resize(thumbnailSize);
     const thumbnailName = format("./%s/%s",
-                                 g_outputDir, thumbnailName(fileName));
+                                 g_outputDir, thumbnailName(filePath));
     writefln("Writing %s", thumbnailName);
     image.write(thumbnailName);
 
 
-    return OutputInfo(format("%s/%s", g_outputDir, fileName.baseName),
+    return OutputInfo(filePath,
+                      format("%s/%s", g_outputDir, filePath.baseName),
                       dateTimeOriginal);
 }
 
@@ -217,13 +225,12 @@ XmlElement makeThumbnailStrip(OutputInfo[] pictures, size_t index)
         row.add(new TableCell([ "align" : "center",
                                 "bgcolor" : linkBgColor ])
                 .add(makeLink(pictureFileName(pictures[previousPageIndex]
-                                              .filePath),
+                                              .processedFilePath),
                               previousPageText)));
 
     } else {
         row.add(new TableCell([ "align" : "center",
-                                "bgcolor" : padColor ])
-                .add(previousPageText));
+                                "bgcolor" : padColor ]));
     }
 
     foreach (_; padBefore) {
@@ -234,14 +241,17 @@ XmlElement makeThumbnailStrip(OutputInfo[] pictures, size_t index)
         if (i == index) {
             row.add(new TableCell([ "align" : "center" ])
                     .add(new Span([ "style" : "opacity:0.5;" ])
-                         .add(makeImg(thumbnailName(pictures[i].filePath)))));
+                         .add(makeImg(thumbnailName(pictures[i]
+                                                    .processedFilePath)))));
 
         } else {
             row.add(new TableCell([ "align" : "center",
                                     "bgcolor" : linkBgColor ])
                     .add(new Link([ "href" :
-                                    pictureFileName(pictures[i].filePath) ])
-                         .add(makeImg(thumbnailName(pictures[i].filePath)))));
+                                    pictureFileName(pictures[i]
+                                                    .processedFilePath) ])
+                         .add(makeImg(thumbnailName(pictures[i]
+                                                    .processedFilePath)))));
         }
     }
 
@@ -261,12 +271,11 @@ XmlElement makeThumbnailStrip(OutputInfo[] pictures, size_t index)
         row.add(new TableCell([ "align" : "center",
                                 "bgcolor" : linkBgColor ])
                     .add(makeLink(pictureFileName(pictures[nextPageIndex]
-                                                  .filePath),
+                                                  .processedFilePath),
                                   nextPageText)));
     } else {
         row.add(new TableCell([ "align" : "center",
-                                "bgcolor" : padColor ])
-                .add(nextPageText));
+                                "bgcolor" : padColor ]));
     }
 
     auto table = (new Table).add(row);
@@ -286,26 +295,88 @@ XmlElement makePictureDateTimeRow(string dateTimeOriginal)
                               .add(dateTimeOriginal));
 }
 
-XmlElement makePictureTable(OutputInfo outputInfo)
+string fileSizeText(const size_t originalSize)
 {
-    return (new Table).add(
-        [ makePictureRow(outputInfo.filePath),
-          makePictureDateTimeRow(outputInfo.dateTimeOriginal) ]);
+    enum denoms = [ " bytes", "K", "M", "G" ];
+
+    size_t size = originalSize;
+
+    foreach (denom; denoms) {
+        if (size < 1024) {
+            return format("%s%s", size, denom);
+
+        } else {
+            size /= 1024;
+        }
+    }
+
+    return format("%s bytes", originalSize);
 }
 
-void makeHtmlPages(OutputInfo[] pictures, string outputDir)
+struct ZipFileInfo
 {
+    string fileName;
+    size_t fileCount;
+}
+
+string zipFileText(ZipFileInfo zipFile)
+{
+    return format("%s&nbsp;(%s&nbsp;files,&nbsp;%s)",
+                  makeLink(zipFile.fileName.baseName),
+                  zipFile.fileCount,
+                  fileSizeText(zipFile.fileName.getSize));
+}
+
+XmlElement makeZipLinkRow(ZipFileInfo[] zipFiles)
+{
+    string downLoadText = format("Downloads: %s%-(%s%)",
+                                 new Break,
+                                 zipFiles
+                                 .sort!((a, b) => a.fileName < b.fileName)
+                                 .map!(a => format("%s%s",
+                                                   zipFileText(a), new Break)));
+
+    return (new TableRow)
+        .add([ new TableCell([ "align" : "center" ])
+               .add(downLoadText) ]);
+}
+
+XmlElement makePictureTable(OutputInfo outputInfo, XmlElement zipLinkRow)
+{
+    return (new Table).add(
+        [ makePictureRow(outputInfo.processedFilePath),
+          makePictureDateTimeRow(outputInfo.dateTimeOriginal),
+          zipLinkRow ]);
+}
+
+XmlElement[] makePageFooter()
+{
+    return [ new Hr,
+             new Paragraph()
+             .add(makeLink("https://github.com/acehreli/alibum", "alibum"))
+             .add(" • Ali Çehreli") ];
+}
+
+void makeHtmlPages(OutputInfo[] pictures,
+                   string outputDir,
+                   ZipFileInfo[] zipFiles)
+{
+    auto zipLinkRow = makeZipLinkRow(zipFiles);
+
     foreach (i, picture; pictures.parallel) {
-        auto docBody = (new Body).add([ makeThumbnailStrip(pictures, i),
-                                        makePictureTable(picture)].centered);
+        auto docBody = (new Body).add(([ makeThumbnailStrip(pictures, i),
+                                         makePictureTable(picture, zipLinkRow) ]
+                                       ~ makePageFooter())
+                                      .centered);
 
         const pictureHtmlFileName =
-            format(".%s", pictureHtml(picture.filePath));
+            format(".%s", pictureHtml(picture.processedFilePath));
         auto file = File(pictureHtmlFileName, "w");
 
         auto doc = (new Document).add(
             (new Html).add([ (new Head).add(
-                                   [ makeTitle(picture.filePath.baseName),
+                                   [ makeTitle(picture
+                                               .processedFilePath.baseName),
                                      makeBase(outputDir ~ "/"),
                                      new Style([ "type" : "text/css" ])
                                      .add(tableCellStyle.to!string),
@@ -327,28 +398,55 @@ void makeHtmlPages(OutputInfo[] pictures, string outputDir)
     }
 }
 
+ZipFileInfo[] makeZipArchive(string[] filePaths, string zipFilePathTemplate)
+{
+    ZipFileInfo[] result;
+
+    for (size_t zipFileCount = 0; !filePaths.empty; ++zipFileCount) {
+        auto archive = new ZipArchive;
+        size_t fileCount = 0;
+
+        for (size_t archiveSize = 0;
+             !filePaths.empty && (archiveSize < zipFileSizeLimit);
+             filePaths.popFront()) {
+
+            const filePath = filePaths.front;
+            auto fileContent = read(filePath);
+            auto archiveMember = new ArchiveMember();
+            archiveMember.name = filePath.baseName;
+            archiveMember.expandedData = cast(ubyte[])fileContent;
+
+            archive.addMember(archiveMember);
+
+            archiveSize += filePath.getSize();
+            ++fileCount;
+        }
+
+        const zipFilePath = format(zipFilePathTemplate, zipFileCount + 1);
+
+        writefln("Creating %s", zipFilePath);
+        archive.build();
+
+        writefln("Writing %s", zipFilePath);
+        std.file.write(zipFilePath, archive.data);
+
+        result ~= ZipFileInfo(zipFilePath, fileCount);
+    }
+
+    return result;
+}
+
 void printUsage(string[] args)
 {
     const progName = baseName(args[0]);
 
-    writefln("Usage  : %s <input-directory> <url-prefix>", progName);
-    writeln();
-    writefln("Example: %s ~/Pictures/birthday /photo/bday", progName);
+    stderr.writefln("Usage  : %s <input-directory> <url-prefix>", progName);
+    stderr.writeln();
+    stderr.writefln("Example: %s ~/Pictures/birthday /photo/bday", progName);
 }
 
-int main(string[] args)
+void makeAlbum(string inputDir, string outputDir)
 {
-    if (args.length != 3) {
-        printUsage(args);
-        return 1;
-    }
-
-    string inputDir = args[1];
-    string outputDir = args[2];
-
-    MagickWandGenesis();
-    scope (exit) MagickWandTerminus();
-
     writefln("Creating directory %s", outputDir);
     mkdirRecurse(format("./%s", outputDir));
 
@@ -364,7 +462,47 @@ int main(string[] args)
 
     pictures.sort!((a, b) => (a.dateTimeOriginal < b.dateTimeOriginal));
 
-    makeHtmlPages(pictures, outputDir);
+    ZipFileInfo[] zipFiles;
 
-    return 0;
+    zipFiles ~=
+        makeZipArchive(pictures
+                       .map!(a => format("./%s", a.processedFilePath))
+                       .array,
+                       format("./%s/%s", outputDir, zipFileNameTemplate));
+
+    zipFiles ~=
+        makeZipArchive(pictures
+                       .map!(a => a.originalFilePath)
+                       .array,
+                       format("./%s/%s", outputDir,
+                              originalsZipFileNameTemplate));
+
+    makeHtmlPages(pictures, outputDir, zipFiles);
+}
+
+int main(string[] args)
+{
+    int status = 0;
+
+    if (args.length != 3) {
+        printUsage(args);
+        status = 1;
+
+    } else {
+        string inputDir = args[1];
+        string outputDir = args[2];
+
+        MagickWandGenesis();
+        scope (exit) MagickWandTerminus();
+
+        if (format("./%s", outputDir).exists) {
+            stderr.writefln("Error: ./%s already exists", outputDir);
+            status = 1;
+
+        } else {
+            makeAlbum(inputDir, outputDir);
+        }
+    }
+
+    return status;
 }

@@ -88,6 +88,15 @@ alias Link = SimpleXmlElement!"a";
 alias Style = SimpleXmlElement!"style";
 alias Span = SimpleXmlElement!"span";
 alias Title = SimpleXmlElement!"title";
+alias Paragraph = SimpleXmlElement!"p";
+
+class Hr : XmlElement
+{
+    this()
+    {
+        super("hr", "");
+    }
+}
 
 class Break : XmlElement
 {
@@ -129,18 +138,17 @@ struct CssStyleValue
     }
 }
 
-Center centered(XmlElement[] elements...)
+XmlElement centered(XmlElement[] elements...)
 {
-    auto center = new Center;
-    center.add(elements);
-    return center;
+    return (new Center).add(elements);
 }
 
-Link makeLink(string href, string text)
+XmlElement makeLink(string href, string text = null)
 {
-    auto link = new Link([ "href" : href ]);
-    link.add(text);
-    return link;
+    if (!text) {
+        text = href;
+    }
+    return new Link([ "href" : href ]).add(text);
 }
 
 Img makeImg(string src, string alt = "image")
