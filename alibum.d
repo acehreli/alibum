@@ -17,6 +17,7 @@ import std.conv;
 import std.array;
 import std.algorithm;
 import std.datetime;
+import std.process;
 
 pragma(lib, "MagickWand");
 
@@ -174,17 +175,27 @@ struct OutputInfo
     string dateTimeOriginal;
 }
 
-/* Returns the name of the thumbnail of the image. */
-string thumbnailName(string fileName)
+string fileNameWithExtensionPrefix(string fileName, string prefix)
 {
     string ext = fileName.extension;
     string base = fileName.baseName(ext);
-    return format("%s.thumb%s", base, ext);
+    return format("%s.%s%s", base, prefix, ext);
+}
+
+/* Returns the name of the thumbnail of the image. */
+string thumbnailName(string fileName)
+{
+    return fileNameWithExtensionPrefix(fileName, "thumb");
 }
 
 unittest
 {
     assert(thumbnailName("/foo/bar/xyz.jpg") == "xyz.thumb.jpg");
+}
+
+string pictureName(string fileName)
+{
+    return fileNameWithExtensionPrefix(fileName, pictureLongEdgeSize.text);
 }
 
 /* This is a workaround for not being able to use the local variable
@@ -204,7 +215,7 @@ OutputInfo processImage(string filePath)
     auto dateTimeOriginal = image.getProperty("exif:DateTimeOriginal");
 
     image.resize(pictureLongEdgeSize, pictureCompressionQuality);
-    const pictName = format("./%s/%s", g_outputDir, filePath.baseName);
+    const pictName = format("./%s/%s", g_outputDir, pictureName(filePath));
     writefln("Writing %s", pictName);
     image.write(pictName);
 
@@ -213,6 +224,10 @@ OutputInfo processImage(string filePath)
                                  g_outputDir, thumbnailName(filePath));
     writefln("Writing %s", thumbnailName);
     image.write(thumbnailName);
+
+    const symLinkName = format("./%s/%s", g_outputDir, filePath.baseName);
+    writefln("Creating symbolic link %s", symLinkName);
+    symlink(filePath, symLinkName);
 
     return OutputInfo(filePath,
                       format("%s/%s", g_outputDir, filePath.baseName),
@@ -330,7 +345,7 @@ XmlElement makeThumbnailStrip(OutputInfo[] pictures, size_t index)
     return table;
 }
 
-XmlElement makePictureRow(string picturePath, OutputInfo prev, OutputInfo next)
+XmlElement makePictureRow(OutputInfo picture, OutputInfo prev, OutputInfo next)
 {
     return (new TableRow)
         .add(new TableCell([ "class" : "arrow",
@@ -342,7 +357,9 @@ XmlElement makePictureRow(string picturePath, OutputInfo prev, OutputInfo next)
                              previousPictureText)
                   .text))
         .add(new TableCell([ "class" : "main", "align" : "center" ])
-             .add(makeImg(picturePath.baseName)))
+             .add(new Link([ "href" : picture.originalFilePath.baseName ])
+                  .add(makeImg(pictureName(picture.processedFilePath)))))
+
         .add(new TableCell([ "class" : "arrow",
                              "align" : "center",
                              "valign" : "top" ])
@@ -366,7 +383,7 @@ XmlElement makePictureTable(OutputInfo picture,
                             OutputInfo next)
 {
     return (new Table).add(
-        [ makePictureRow(picture.processedFilePath, prev, next),
+        [ makePictureRow(picture, prev, next),
           makePictureDateTimeRow(picture.dateTimeOriginal) ]);
 }
 
@@ -449,6 +466,11 @@ size_t makeAlbum(string inputDir, string outputDir)
     pictures.sort!((a, b) => (a.dateTimeOriginal < b.dateTimeOriginal));
 
     makeHtmlPages(pictures, outputDir);
+
+    const tarFile = format(".%s.tar.gz", outputDir);
+    system(format("tar zcvh .%s > %s", outputDir, tarFile));
+
+    writefln("Created %s", tarFile);
 
     return pictures.length;
 }
