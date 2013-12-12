@@ -87,4 +87,13 @@ CompressionType MagickGetImageCompression(MagickWand *wand);
 size_t MagickGetImageCompressionQuality(MagickWand *wand);
 MagickBooleanType MagickSetImageCompressionQuality(MagickWand *wand,
                                                    const size_t quality);
+
+alias ssize_t = long;
+
+MagickBooleanType MagickCropImage(MagickWand *wand,
+                                  const size_t width,
+                                  const size_t height,
+                                  const ssize_t x,
+                                  const ssize_t y);
+
 } /* extern (C) */

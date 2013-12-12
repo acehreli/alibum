@@ -6,10 +6,21 @@ SOURCES := \
     magickwand.d \
 
 DCOMPILER := \
-    ~/dmd2/linux/bin64/dmd
+    dmd
 
 DFLAGS := \
     -w \
+    -inline \
 
-alibum: $(SOURCES) Makefile
+UNITTEST_FLAGS := \
+    $(DFLAGS) \
+    -unittest \
+    -main \
+
+alibum_tests: $(SOURCES) Makefile
+	$(DCOMPILER) | grep 'D Compiler'
+	$(DCOMPILER) $(SOURCES) $(UNITTEST_FLAGS) -of$@
+	./$@
+
+alibum: alibum_tests $(SOURCES) Makefile
 	$(DCOMPILER) $(SOURCES) $(DFLAGS) -of$@
