@@ -1,3 +1,6 @@
+/*
+ * Manages XML elements and a subset of the HTML spec.
+ */
 module html;
 
 import std.string;
@@ -5,6 +8,7 @@ import std.format;
 import std.conv;
 import std.array;
 
+/* Represents an XML element. */
 class XmlElement
 {
     string tag;
@@ -61,6 +65,8 @@ class XmlElement
     }
 }
 
+/* Represents an XML element where the opening and closing tags are the
+ * same. */
 class SimpleXmlElement(string Tag, string TagClosing = Tag) : XmlElement
 {
     this(string[string] attributes = null)
@@ -69,6 +75,7 @@ class SimpleXmlElement(string Tag, string TagClosing = Tag) : XmlElement
     }
 }
 
+/* Represents the !DOCTYPE HTML element. */
 class Document : XmlElement
 {
     this(string[string] attributes = null)
@@ -76,6 +83,8 @@ class Document : XmlElement
         super("!DOCTYPE html", "", attributes);
     }
 }
+
+/* Various simple HTML spec elements. */
 
 alias Html = SimpleXmlElement!"html";
 alias Head = SimpleXmlElement!"head";
@@ -90,6 +99,7 @@ alias Span = SimpleXmlElement!"span";
 alias Title = SimpleXmlElement!"title";
 alias Paragraph = SimpleXmlElement!"p";
 
+/* Horizontal line. */
 class Hr : XmlElement
 {
     this()

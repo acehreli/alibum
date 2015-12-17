@@ -3,6 +3,7 @@ module magickwand;
 extern (C) {
 
 struct MagickWand;
+struct PixelWand;
 
 enum MagickBooleanType : int
 {
@@ -38,6 +39,7 @@ enum FilterTypes
 }
 
 MagickWand *DestroyMagickWand(MagickWand *);
+PixelWand *DestroyPixelWand(PixelWand *);
 MagickBooleanType MagickWriteImages(MagickWand *,
                                     const char *,const MagickBooleanType);
 MagickBooleanType MagickResizeImage(MagickWand *, const ulong,const ulong,
@@ -48,6 +50,7 @@ MagickBooleanType MagickAdaptiveResizeImage(MagickWand *wand,
 MagickBooleanType MagickNextImage(MagickWand *);
 void MagickResetIterator(MagickWand *);
 MagickWand *NewMagickWand();
+PixelWand *NewPixelWand();
 void MagickWandGenesis();
 void MagickWandTerminus();
 MagickBooleanType MagickReadImage(MagickWand *,const char *);
@@ -64,6 +67,7 @@ MagickBooleanType MagickThumbnailImage(MagickWand *wand,
 
 MagickWand *CloneMagickWand(const MagickWand *);
 MagickBooleanType IsMagickWand(const MagickWand *);
+MagickBooleanType IsPixelWand(const PixelWand *);
 
 enum CompressionType
 {
@@ -95,5 +99,9 @@ MagickBooleanType MagickCropImage(MagickWand *wand,
                                   const size_t height,
                                   const ssize_t x,
                                   const ssize_t y);
+
+MagickBooleanType MagickRotateImage(MagickWand *wand,
+                                    const PixelWand *background,
+                                    const double degrees);
 
 } /* extern (C) */

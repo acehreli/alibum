@@ -1,5 +1,7 @@
 /*
- * This module implements a minimalistic web picture album.
+ * Implements a minimalistic web picture album.
+ *
+ *   https://github.com/acehreli/alibum
  */
 
 module alibum;
@@ -33,7 +35,7 @@ enum size_t thumbnailForward = pictureLongEdgeSize / thumbnailSize / 2;
 // The number of available thumbnails for pictures before the current picture
 enum size_t thumbnailBackward = thumbnailForward;
 
-enum string[] supportedImageExtensions = [ ".JPG", ".jpg", ".jpeg" ];
+enum string[] supportedImageExtensions = [ ".JPG", ".jpg", ".jpeg", ".png" ];
 
 enum string previousPictureText = "&lt;";
 enum string nextPictureText = "&gt;";
@@ -62,12 +64,17 @@ enum arrowCellStyle = CssStyleValue(
 struct Image
 {
     MagickWand *wand;
+    PixelWand *background;
 
     this(string fileName)
     {
+        scope (failure) cleanup();
+
         this.wand = NewMagickWand();
         enforce(this.wand);
-        scope (failure) cleanup();
+
+        this.background = NewPixelWand();
+        enforce(this.background);
 
         auto status = MagickReadImage(wand, fileName.toStringz);
         if (status != MagickBooleanType.MagickTrue) {
@@ -85,6 +92,11 @@ struct Image
         if (IsMagickWand(wand) == MagickBooleanType.MagickTrue) {
             wand = DestroyMagickWand(wand);
             enforce(wand is null);
+        }
+
+        if (IsPixelWand(background) == MagickBooleanType.MagickTrue) {
+            background = DestroyPixelWand(background);
+            enforce(background is null);
         }
     }
 
@@ -165,9 +177,16 @@ struct Image
 
         return propertyValue_raw.to!string;
     }
+
+    // Rotates the image counter-clockwise
+    void rotate(double degrees)
+    {
+        const status = MagickRotateImage(wand, background, degrees);
+        enforce(status == MagickBooleanType.MagickTrue);
+    }
 }
 
-/* A collection of useful information useful post-processing of images. */
+/* A collection of information useful when post-processing the images. */
 struct OutputInfo
 {
     string originalFilePath;
@@ -175,17 +194,24 @@ struct OutputInfo
     string dateTimeOriginal;
 }
 
-string fileNameWithExtensionPrefix(string fileName, string prefix)
+/* Returns only the file name of the path after inserting the prefix before
+ * the extension. */
+string fileNameWithExtensionPrefix(string filePath, string prefix)
 {
-    string ext = fileName.extension;
-    string base = fileName.baseName(ext);
+    string ext = filePath.extension;
+    string base = filePath.baseName(ext);
     return format("%s.%s%s", base, prefix, ext);
 }
 
-/* Returns the name of the thumbnail of the image. */
-string thumbnailName(string fileName)
+unittest
 {
-    return fileNameWithExtensionPrefix(fileName, "thumb");
+    assert(fileNameWithExtensionPrefix("/dir/abc.txt", "foo") == "abc.foo.txt");
+}
+
+/* Returns the name of the thumbnail of the image. */
+string thumbnailName(string filePath)
+{
+    return fileNameWithExtensionPrefix(filePath, "thumb");
 }
 
 unittest
@@ -193,9 +219,16 @@ unittest
     assert(thumbnailName("/foo/bar/xyz.jpg") == "xyz.thumb.jpg");
 }
 
-string pictureName(string fileName)
+string pictureName(string filePath)
 {
-    return fileNameWithExtensionPrefix(fileName, pictureLongEdgeSize.text);
+    return fileNameWithExtensionPrefix(filePath, pictureLongEdgeSize.text);
+}
+
+unittest
+{
+    // For example, "abc.960.jpg"
+    const expectedName = format("abc.%s.jpg", pictureLongEdgeSize);
+    assert(pictureName("/foo/abc.jpg") == expectedName);
 }
 
 /* This is a workaround for not being able to use the local variable
@@ -213,8 +246,37 @@ OutputInfo processImage(string filePath)
 
     auto image = Image(filePath);
     auto dateTimeOriginal = image.getProperty("exif:DateTimeOriginal");
+    auto orientation = image.getProperty("exif:Orientation");
 
     image.resize(pictureLongEdgeSize, pictureCompressionQuality);
+
+    // Counter-clockwise rotation
+    switch (orientation) {
+    case "1":
+        // Upright camera
+        break;
+
+    case "8":
+        // Top of the camera is pointing to left
+        image.rotate(270);
+        break;
+
+    case "3":
+        // Top of the camera is pointing to the ground
+        image.rotate(180);
+        break;
+
+    case "6":
+        // Top of the camera is pointing to right
+        image.rotate(90);
+        break;
+
+    default:
+        stderr.writefln("Unsupported orientation %s for image %s",
+                        orientation, filePath);
+        break;
+    }
+
     const pictName = format("./%s/%s", g_outputDir, pictureName(filePath));
     writefln("Writing %s", pictName);
     image.write(pictName);
@@ -246,11 +308,21 @@ string pictureFileName(string filePath)
     return format("%s%s", base, ".html");
 }
 
+unittest
+{
+    assert(pictureFileName("/foo/abc.jpg") == "abc.html");
+}
+
 string pictureHtml(string filePath)
 {
     string ext = filePath.extension;
     string base = filePath.baseName(ext);
     return format("%s/%s%s", filePath.dirName, base, ".html");
+}
+
+unittest
+{
+    assert(pictureHtml("/foo/bar.jpg") == "/foo/bar.html");
 }
 
 XmlElement makeThumbnailStrip(OutputInfo[] pictures, size_t index)
@@ -446,6 +518,7 @@ void printUsage(string[] args)
     stderr.writefln("Usage  : %s <input-directory> <url-prefix>", progName);
     stderr.writeln();
     stderr.writefln("Example: %s ~/Pictures/birthday /photo/bday", progName);
+    stderr.writeln ("         (Do not include /public_html.)");
 }
 
 size_t makeAlbum(string inputDir, string outputDir)
@@ -468,7 +541,7 @@ size_t makeAlbum(string inputDir, string outputDir)
     makeHtmlPages(pictures, outputDir);
 
     const tarFile = format(".%s.tar.gz", outputDir);
-    system(format("tar zcvh .%s > %s", outputDir, tarFile));
+    executeShell(format("tar zcvh .%s > %s", outputDir, tarFile));
 
     writefln("Created %s", tarFile);
 
