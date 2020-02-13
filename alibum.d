@@ -18,8 +18,9 @@ import std.parallelism;
 import std.conv;
 import std.array;
 import std.algorithm;
-import std.datetime;
+import std.datetime.stopwatch;
 import std.process;
+import std.random;
 
 pragma(lib, "MagickWand-6.Q16");
 
@@ -277,19 +278,19 @@ OutputInfo processImage(string filePath)
         break;
     }
 
-    const pictName = format("./%s/%s", g_outputDir, pictureName(filePath));
+    const pictName = format(".%s/%s", g_outputDir, pictureName(filePath));
     writefln("Writing %s", pictName);
     image.write(pictName);
 
     image.thumbnail(thumbnailSize);
-    const thumbnailName = format("./%s/%s",
+    const thumbnailName = format(".%s/%s",
                                  g_outputDir, thumbnailName(filePath));
     writefln("Writing %s", thumbnailName);
     image.write(thumbnailName);
 
-    const symLinkName = format("./%s/%s", g_outputDir, filePath.baseName);
+    const symLinkName = format(".%s/%s", g_outputDir, filePath.baseName);
     writefln("Creating symbolic link %s", symLinkName);
-    symlink(filePath, symLinkName);
+    symlink(filePath.absolutePath, symLinkName);
 
     return OutputInfo(filePath,
                       format("%s/%s", g_outputDir, filePath.baseName),
@@ -486,7 +487,7 @@ void makeHtmlPages(OutputInfo[] pictures, string outputDir)
             (new Html).add([ (new Head).add(
                                    [ makeTitle(picture
                                                .processedFilePath.baseName),
-                                     makeBase(outputDir ~ "/"),
+
                                      new Style([ "type" : "text/css" ])
                                      .add(tableCellStyle.text),
 
@@ -515,7 +516,8 @@ void printUsage(string[] args)
 {
     const progName = baseName(args[0]);
 
-    stderr.writefln("Usage  : %s <input-directory> <url-prefix>", progName);
+    stderr.writefln("Usage  : %s <input-directory> [url-prefix]", progName);
+    stderr.writefln("                              (random if not provided)");
     stderr.writeln();
     stderr.writefln("Example: %s ~/Pictures/birthday /photo/bday", progName);
     stderr.writeln ("         (Do not include /public_html.)");
@@ -541,7 +543,8 @@ size_t makeAlbum(string inputDir, string outputDir)
     makeHtmlPages(pictures, outputDir);
 
     const tarFile = format(".%s.tar.gz", outputDir);
-    executeShell(format("tar zcvh .%s > %s", outputDir, tarFile));
+    const result = executeShell(format!"tar zcvh .%s > %s"(outputDir, tarFile));
+    enforce(result.status == 0, format!"Failed to create tar file. The output was\n%s"(result.output));
 
     writefln("Created %s", tarFile);
 
@@ -554,36 +557,43 @@ version (unittest)
 
 int main(string[] args)
 {
-    int status = 0;
+    string outputDir;
 
-    if (args.length != 3) {
+    switch (args.length)
+    {
+    case 2:
+      outputDir = format!"/%s"(uniform(long(0), long(uint.max)));
+      break;
+
+    case 3:
+      outputDir = args[2];
+      break;
+
+    default:
         printUsage(args);
-        status = 1;
-
-    } else {
-        string outputDir = args[2];
-
-        if (format("./%s", outputDir).exists) {
-            stderr.writefln("Error: ./%s already exists", outputDir);
-            status = 1;
-
-        } else {
-            MagickWandGenesis();
-            scope (exit) MagickWandTerminus();
-
-            StopWatch sw;
-            sw.start();
-
-            string inputDir = args[1];
-            const totalFiles = makeAlbum(inputDir, outputDir);
-
-            sw.stop();
-            writefln("Made %s pages in %s seconds.",
-                     totalFiles, sw.peek().seconds);
-        }
+        return 1;
     }
 
-    return status;
+    assert(!outputDir.empty);
+
+    if (format("./%s", outputDir).exists) {
+      stderr.writefln("Error: ./%s already exists", outputDir);
+      return 1;
+    }
+
+    MagickWandGenesis();
+    scope (exit) MagickWandTerminus();
+
+    StopWatch sw;
+    sw.start();
+
+    string inputDir = args[1];
+    const totalFiles = makeAlbum(inputDir, outputDir);
+
+    sw.stop();
+    writefln("Made %s pages in %s.", totalFiles, sw.peek);
+
+    return 0;
 }
 
 } // version(unittest)
