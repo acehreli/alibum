@@ -21,7 +21,7 @@ import std.algorithm;
 import std.datetime;
 import std.process;
 
-pragma(lib, "MagickWand");
+pragma(lib, "MagickWand-6.Q16");
 
 enum size_t thumbnailSize = 64;
 enum size_t thumbnailCompressionQuality = 50;
